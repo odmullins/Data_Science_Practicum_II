@@ -1,0 +1,556 @@
+---
+title: "MSDS696_Practicum_II_Project_Markdown_File"
+author: "Odes Mullins"
+date: "12/15/2019"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+ 
+## Practicum II Project Douglas County Home Sales Prices Evaluation and Prediction
+ 
+### Load required libraries
+ 
+```{r}
+library(readr)
+library(dplyr)
+library(maps)
+library(rgdal)
+library(ggplot2)
+library(scales)
+library(tidyverse)
+library(tidyquant)
+library(GGally)
+library(car)
+library(skimr)
+library(class)
+library(gmodels)
+library(caret)
+library(ranger)
+library(DMwR)
+library(gbm)
+library(xgboost)
+library(e1071)
+ 
+```
+ 
+### Fix number display, set seed, and set the working directory
+ 
+```{r}
+options(scipen = 999)
+set.seed(123)
+setwd('C:\\Users\\Owner\\Documents\\MSDS696 Class Info\\Class_Assignments\\Practicum_II')
+ 
+```
+ 
+### Load the Douglas County Home Sales Report dataset with the column names and evaluate it
+ 
+```{r}
+dcSales <- data.frame(read_csv('SalesInformationReport0101201412312018.csv',col_names = TRUE), check.names=FALSE)
+ 
+head(dcSales)
+ 
+str(dcSales)
+ 
+dim(dcSales)
+ 
+glimpse(dcSales)
+ 
+```
+ 
+### Clean the sales dataset
+ 
+```{r}
+dcSalesClean <- subset(dcSales[order(dcSales$`Account #`, dcSales$`Sale Date`),], `Account Type` == "Residential")
+ 
+dcSalesClean <- subset(dcSalesClean, `Sale Price` > 149999)
+ 
+```
+
+### Load the Douglas County Property Improvement Segments Report dataset with the column names and evaluate it
+ 
+```{r}
+dcPisr <- data.frame(read_csv('PropertyImprovementSegmentsReport0101201412312018.csv',col_names = TRUE), check.names=FALSE)
+ 
+head(dcPisr)
+ 
+str(dcPisr)
+ 
+dim(dcPisr)
+ 
+glimpse(dcPisr)
+ 
+```
+ 
+### Clean the improvement segments dataset
+ 
+```{r}
+dcPisrClean <- subset(dcPisr[order(dcPisr$`Account #`),], `Property Type` == "Residential")
+ 
+dcPisrDup1 = !duplicated(dcPisr[,1:2])
+dcPisrDup2 = !duplicated(apply(dcPisr[,1:2], 2, rev))
+dcPisrClean <- dcPisr[dcPisrDup1 & rev(dcPisrDup2), ]
+ 
+dcPisrClean$Style[dcPisrClean$Style == '1 - Ranch 1 Story'] <- 1
+dcPisrClean$Style[dcPisrClean$Style == '11 - A Frame'] <- 11
+dcPisrClean$Style[dcPisrClean$Style == '25 - 3 Story'] <- 25
+dcPisrClean$Style[dcPisrClean$Style == '5 - 1 1/2 Story Fin'] <- 5
+dcPisrClean$Style[dcPisrClean$Style == '8 - 2 Story'] <- 8
+dcPisrClean$Style[dcPisrClean$Style == '9 - 2 1/2 Story'] <- 9
+ 
+dcPisrClean$Style <- as.double(dcPisrClean$Style)
+ 
+```
+ 
+### Load the Douglas County Building Summary Report dataset with the column names and evaluate it
+ 
+```{r}
+dcBuildSum <- data.frame(read_csv('BuildingSummaryReport0101201412312018.csv',col_names = TRUE), check.names=FALSE)
+ 
+head(dcBuildSum)
+ 
+str(dcBuildSum)
+ 
+dim(dcBuildSum)
+ 
+glimpse(dcBuildSum)
+ 
+```
+ 
+### Clean the building summary dataset
+ 
+```{r}
+dcBsClean <- subset(dcBuildSum[order(dcBuildSum$`Account #`),], `Property Type` == "Residential")
+ 
+dcBsDup1 = !duplicated(dcBuildSum[,1:2])
+dcBsDup2 = !duplicated(apply(dcBuildSum[,1:2], 2, rev))
+dcBsClean <- dcBuildSum[dcBsDup1 & rev(dcBsDup2), ]
+ 
+dcBsClean$Quality[dcBsClean$Quality == 'Low'] <- 0
+dcBsClean$Quality[dcBsClean$Quality == 'Fair'] <- 1
+dcBsClean$Quality[dcBsClean$Quality == 'Average'] <- 2
+dcBsClean$Quality[dcBsClean$Quality == 'Good'] <- 3
+dcBsClean$Quality[dcBsClean$Quality == 'Very Good'] <- 4
+dcBsClean$Quality[dcBsClean$Quality == 'Excellent'] <- 5
+dcBsClean$Quality <- as.double(dcBsClean$Quality)
+ 
+dcBsClean$`Walkout Basement`[dcBsClean$`Walkout Basement` != "true"] <- 0
+dcBsClean$`Walkout Basement`[dcBsClean$`Walkout Basement` == "true"] <- 1
+dcBsClean$`Walkout Basement` <- as.double(dcBsClean$`Walkout Basement`)
+ 
+```
+ 
+### Add sale year and location columns to the sales dataset
+ 
+```{r}
+dcSalesClean$`Sale Date` <- as.Date(dcSalesClean$`Sale Date`,format="%m/%d/%Y")
+dcSalesClean[, "Sale Year"] <- format(dcSalesClean[,"Sale Date"], "%Y")
+dcSalesClean$`Sale Year` <- as.double(dcSalesClean$`Sale Year`)
+ 
+#dcSalesClean <- dcSalesClean %>% 
+#  mutate(Location = paste0(`Account #`, ", en-US, ", `Situs Street Address`, ", ", `Situs City`, ", CO ", `Situs Zip Code`))
+ 
+dcSalesClean$Location <- paste0(dcSalesClean$`Situs Street Address`, ", ", dcSalesClean$`Situs City`, ", CO ", dcSalesClean$`Situs Zip Code`)
+ 
+glimpse(dcSalesClean$`Sale Year`)
+ 
+```
+ 
+### Remove columns from the three datasets which are not being used for evaluations
+ 
+```{r}
+dcSalesClean2 <- dcSalesClean
+dcSalesClean2 <- dcSalesClean2[, -c(17:20)]
+dcSalesClean2 <- dcSalesClean2[, -c(12:14)]
+dcSalesClean2 <- dcSalesClean2[, -c(4:8)]
+glimpse(dcSalesClean2)
+
+dcPisrClean2 <- dcPisrClean
+dcPisrClean2 <- dcPisrClean2[, -c(19:25)]
+dcPisrClean2 <- dcPisrClean2[, -c(4:13)]
+glimpse(dcPisrClean2)
+
+dcBsClean2 <- dcBsClean
+dcBsClean2 <- dcBsClean2[, -c(19:21)]
+dcBsClean2 <- dcBsClean2[, -c(14:15)]
+dcBsClean2 <- dcBsClean2[, -c(12)]
+dcBsClean2 <- dcBsClean2[, -c(4:10)]
+glimpse(dcBsClean2)
+ 
+```
+ 
+### Merge the three datasets into one dataset for evaluations and remove bad data
+ 
+```{r}
+dcSalesMerge <- merge(dcSalesClean2,dcPisrClean2,by=c("State Parcel #","Account #", "Owner Name"))
+ 
+dcSalesMerge <- merge(dcSalesMerge,dcBsClean2,by=c("State Parcel #","Account #", "Owner Name"))
+ 
+dcSalesMerge <- subset(dcSalesMerge, !(`Sale Year` < `Year Built`))
+dcSalesMerge <- dcSalesMerge %>% distinct()
+ 
+sum(is.na(dcSalesMerge))
+dcSalesMerge <- na.omit(dcSalesMerge)
+sum(is.na(dcSalesMerge))
+ 
+dcSalesMerge <- subset(dcSalesMerge, !(`Situs City` == "ELBERT"))
+ 
+```
+ 
+### Below is the code used to extract property address Latitude and Longitude but I only ran once since it runs a long time and there is a limit to usage
+ 
+### I am commenting the commands out but leaving the code for future use. There were 7 errors so I included the code below to fix records as well.
+ 
+### options(BingMapsKey='Really long key')
+### x<-lapply(dcSalesClean5$location[i], geocode, service = "bing", returntype = "coordinates")
+ 
+### Loop through the addesses to get the latitude and longitude of each address and add columns Lat and Lon to the dcSalesClean data frame
+ 
+### The file was written out before. There is a key to extract the Latitude and Longitude so I only ran this process once and I am reading it back in to merge with the data.
+ 
+### for (i in 1:nrow(dcSalesClean5)) 
+### { 
+###   coord <- geocode(dcSalesMerge$Location[i], service = "bing", returntype="coordinates") 
+ 
+###   dcSalesMerge$lat[i] <- as.numeric(coord[1]) 
+ 
+###   dcSalesMerge$lon[i] <- as.numeric(coord[2]) 
+### } 
+### write.csv(dcSalesMerge, "SalesInformationFinal.csv", row.names=FALSE) 
+ 
+### dcSalesFix <- data.frame(read_csv('SalesInformationFix.csv',col_names = TRUE), check.names=FALSE)
+### dim(dcSalesFix)
+ 
+### Loop through the addesses to get the latitude and longitude of each address and add columns Lat and Lon to the dcSalesFix data frame
+ 
+### for (i in 1:nrow(dcSalesFix)) 
+### { 
+###    coord <- geocode(dcSalesFix$Location[i], service = "bing", returntype="coordinates") 
+ 
+###    dcSalesFix$lat[i] <- as.numeric(coord[1]) 
+ 
+###    dcSalesFix$lon[i] <- as.numeric(coord[2]) 
+### } 
+### write.csv(dcSalesFix, "SalesInformationFixed.csv", row.names=FALSE) 
+ 
+### Read saved file and extract Latitude and Longitude coordinates from previous saved file and combine with data from merged file.
+ 
+```{r}
+dcSalesFinalCoord <- data.frame(read_csv('SalesInformationFinal.csv',col_names = TRUE), check.names=FALSE)
+dim(dcSalesFinalCoord)
+ 
+dcSalesFinalCoord <- dcSalesFinalCoord[, -c(11:23)]
+dcSalesFinalCoord$`Sale Date` <- as.Date(dcSalesFinalCoord$`Sale Date`,format="%m/%d/%Y")
+dcSalesFinal <- merge(dcSalesMerge,dcSalesFinalCoord,by=c("State Parcel #","Account #", "Owner Name", "Situs Street Address", "Situs City","Situs Zip Code","Sale Date","Sale Price","Acres","Sale Year"))
+dim(dcSalesFinal)
+str(dcSalesFinal)
+write.csv(dcSalesFinal, "SalesFinalMerged.csv", row.names=FALSE)
+ 
+```
+ 
+### Use FIPS to create Douglas County Map and plot Douglas County sales data
+ 
+### Extract the map coordinates from the Census Bureau and unzip the information in the directory before using. I commented this command as well since it needs to be run once.
+ 
+### https://www2.census.gov/geo/tiger/GENZ2010/gz_2010_08_060_00_500k.zip
+ 
+### I used the coordinates to map all of Colorado then I limited to only Douglas County and removed division lines from within the county since this map showed county districts.
+ 
+```{r}
+shape_file <- "gz_2010_08_060_00_500k"
+shape_file_dir <- shape_file
+ 
+raw_tract <- readOGR(dsn = shape_file_dir, layer = shape_file)
+class(raw_tract)
+tract <- fortify(raw_tract, region="GEO_ID")
+head(tract)
+ 
+outline_layer <- geom_polygon(aes(long, lat, group = group),
+                              fill = NA, col = "black", size = 0.2)
+ 
+ggplot(tract) + outline_layer + coord_quickmap()
+ 
+county.fips.table <-
+    mutate(maps::county.fips, county = sub(":.*", "", polyname))
+ 
+getCountyFIPS <- function(county, state = "colorado") {
+    key <- paste(tolower(state), tolower(county), sep = ",")
+    idx <- match(key, county.fips.table$county)
+    county.fips.table$fips[idx]
+}
+ 
+county_data <- function(tract, county, state = "colorado") {
+    fips <- getCountyFIPS(county, state)
+    pkey <- paste0("0600000US0", fips)
+    filter(tract, grepl(pkey, id))
+}
+ 
+dcTract <- county_data(tract, "douglas")
+ 
+dcTract <- dcTract[ -c(1:92,103:277,292:397,447:651), ]
+ 
+for (i in 1:nrow(dcTract))
+{
+   dcTract$order[i][dcTract$order[i] >11164 & dcTract$order[i] < 11175] <- (dcTract$order[i] - 1000)
+   dcTract$order[i][dcTract$order[i] >11349 & dcTract$order[i] < 11364] <- (dcTract$order[i] - 2000)
+   dcTract$order[i][dcTract$order[i] >11469 & dcTract$order[i] < 11509] <- (dcTract$order[i] - 3000)
+   dcTract$order[i][dcTract$order[i] >11508 & dcTract$order[i] < 11519] <- (dcTract$order[i] - 4000)
+}
+ 
+dcTract <- dcTract[order(dcTract$order),]
+ 
+```
+ 
+### Plot map with all five years of sales data for review then plot only 2018 for comparison.
+ 
+```{r, dpi=300}
+ggplot(dcTract, aes(x=long, y=lat)) +
+  geom_polygon(fill = "lightgrey", color = "black") + 
+  geom_point(data = dcSalesFinal, aes(x=long, y=lat, group=as.factor(`Situs City`), color = as.factor(`Situs City`))) + 
+  theme_void() + 
+  scale_color_manual(name = "Property CIty", values = c("black", "red", "lightblue", "blue", "brown", "lightgreen", "green", "darkgreen", "orange", "pink", "purple", "yellow")) + 
+  guides(alpha = guide_legend(title.position = "top", title.hjust = 0.5)) +
+  labs(title="Douglas County Property Sales 2014 - 2018")
+ 
+dcSalesFinal2018 <- subset(dcSalesFinal, (`Sale Year` == 2018))
+ 
+ggplot(dcTract, aes(x=long, y=lat)) +
+  geom_polygon(fill = "lightgrey", color = "black") + 
+  geom_point(data = dcSalesFinal2018, aes(x=long, y=lat, group=as.factor(`Situs City`), color = as.factor(`Situs City`))) + 
+  theme_void() + 
+  scale_color_manual(name = "Property CIty", values = c("black", "red", "lightblue", "blue", "brown", "lightgreen", "green", "darkgreen", "orange", "pink", "purple", "yellow")) + 
+  guides(alpha = guide_legend(title.position = "top", title.hjust = 0.5)) +
+  labs(title="Douglas County Property Sales 2018")
+ 
+```
+ 
+### Plot comparisons of several of the variables for comparison.
+ 
+```{r, dpi=300}
+ggplot(dcSalesFinal, aes(x=`Sale Year`, y=`Sale Price`)) + geom_point(shape=1, color='blue') + ggtitle("Sale Price by Sale Year")
+ 
+ggplot(dcSalesFinal, aes(x=`Improvmnt SF`,y=`Sale Price`)) + geom_point(shape=1, color='blue') + ggtitle("Sale Price by Home SF") + xlab("Home SF") + ylab("Sale Price")
+ 
+dcSalesFinal$`Total Finished SF` <- dcSalesFinal$`Improvmnt SF` + dcSalesFinal$`Finished Basement SF`
+ggplot(dcSalesFinal, aes(x=dcSalesFinal$`Total Finished SF`,y=`Sale Price`)) + geom_point(shape=1, color='blue') + ggtitle("Sale Price by Tot Fin SF") + xlab("Home Total Finished SF") + ylab("Sale Price")
+ 
+ggplot(dcSalesFinal, aes(x=Quality,y=`Sale Price`)) + geom_point(shape=1, color='blue') + ggtitle("Sale Price by Home Quality") + xlab("Home Quality") + ylab("Sale Price")
+ 
+ggplot(dcSalesFinal, aes(x=`Situs Zip Code`,y=`Sale Price`)) + geom_point(shape=1, color='blue') + ggtitle("Sale Price by Property Zip Code") + xlab("Property Zip Code") + ylab("Sale Price")
+ 
+ggplot(dcSalesFinal, aes(x=Style,y=`Sale Price`)) + geom_point(shape=1, color='blue') + ggtitle("Sale Price by Home Style") + xlab("Home Style") + ylab("Sale Price")
+ 
+ggplot(dcSalesFinal, aes(x=`Bedroom Count`,y=`Sale Price`)) + geom_point(shape=1, color='blue') + ggtitle("Sale Price by Home Bedroom Count") + xlab("Home Bedroom Count") + ylab("Sale Price")
+ 
+ggplot(dcSalesFinal, aes(x=`Bathroom Count`,y=`Sale Price`)) + geom_point(shape=1, color='blue') + ggtitle("Sale Price by Home Bathroom Count") + xlab("Home Bathroom Count") + ylab("Sale Price")
+ 
+ggplot(dcSalesFinal, aes(x=`Year Built`,y=`Sale Price`)) + geom_point(shape=1, color='blue') + ggtitle("Sale Price by Home Year Built") + xlab("Home Year Built") + ylab("Sale Price")
+ 
+median_price_by_year = dcSalesFinal %>%
+  group_by(`Sale Year`) %>%
+  summarise(median_price_year = median(`Sale Price`)
+  )
+ 
+ggplot(median_price_by_year, aes(x=`Sale Year`,y=`median_price_year`)) + xlab("Sale Year") + ylab("Median Sale Price") +
+ geom_line(size=1.5, color="blue") +
+ labs(title="Median Sale Price By Sale Year")
+ 
+```
+ 
+### Create columns for price for finished square foot (excludes basement) and create the average price for square foot and plot it.
+ 
+```{r, dpi=300}
+dcSalesFinal$price_home_sqft <- dcSalesFinal$`Sale Price`/dcSalesFinal$`Improvmnt SF`
+ 
+ave_price_per_sqft = dcSalesFinal %>%
+  group_by(`Sale Year`) %>%
+  summarise(ave_price_per_sqft = mean(price_home_sqft)
+  )
+ 
+ggplot(ave_price_per_sqft, aes(x=`Sale Year`,y=ave_price_per_sqft)) + xlab("Sale Year") + ylab("Price Per Square Foot") +
+ geom_line(size=1.5, color="blue") +
+ labs(title="Avg Sale Price Per Fin SF (Excl Bsmt) By Sale Yr")
+ 
+```
+ 
+### Create columns for price for total finished square foot (includes basement) and create the average price for square foot and plot it.
+ 
+```{r, dpi=300}
+dcSalesFinal$price_tot_home_sqft <- dcSalesFinal$`Sale Price`/(dcSalesFinal$`Improvmnt SF` + dcSalesFinal$`Finished Basement SF`)
+ 
+# computes the average price per sq ft 
+ave_price_tot_sqft = dcSalesFinal %>%
+  group_by(`Sale Year`) %>%
+  summarise(ave_price_tot_sqft = mean(price_tot_home_sqft)
+  )
+ 
+ggplot(ave_price_tot_sqft, aes(x=`Sale Year`,y=ave_price_tot_sqft)) + xlab("Sale Year") + ylab("Price Per Square Foot") +
+ geom_line(size=1.5, color="blue") +
+ labs(title="Avg Sale Price Per Tot Fin SF (Incl Bsmt) By Sale Yr")
+ 
+```
+ 
+### Create box plot of some additional variables for evaluation.
+ 
+```{r, dpi=300}
+boxplot(`Sale Price` ~ Style, data = dcSalesFinal, xlab="Home Style", ylab="Sale Price",main="Sale Price by Home Style")
+ 
+boxplot(`Sale Price` ~ `Situs City`, data = dcSalesFinal, xlab="Property City", ylab="Sale Price",main="Sale Price by Property City", cex.axis=.2)
+ 
+boxplot(price_home_sqft ~ `Situs City`, data = dcSalesFinal, xlab="Property City", ylab="Price Per Square Foot",main="Price Per Sq Ft by Property City", cex.axis=.2)
+ 
+boxplot(price_home_sqft ~ Quality, data = dcSalesFinal, xlab="Home Quality", ylab="Price Per Square Foot",main="Price Per Sq Ft by Quality")
+ 
+```
+ 
+### Create file containing only those independent variables used for predictions and the depending variable (Sales Price).
+ 
+```{r}
+myvars = c("Acres", "Improvmnt SF", "Garage SF", "Basement SF", "Finished Basement SF", "Total Porch SF", "Year Built", "Situs Zip Code", "Sale Year", "Style", "Stories", "Bedroom Count", "Bathroom Count", "Quality", "Walkout Basement", "Sale Price")
+dcSalesPartial = dcSalesFinal[myvars]
+str(dcSalesPartial)
+summary(dcSalesPartial)
+ 
+```
+ 
+### Create initial model prior to change number data to factors.
+ 
+```{r}
+dcSalesPartialLm <- lm(`Sale Price` ~ ., data = dcSalesPartial)
+confint(dcSalesPartialLm)
+summary(dcSalesPartialLm)
+ 
+```
+ 
+### Change several columns to factor to give a more accurate evaluation then create model and evaluate.
+ 
+```{r}
+dcSalesPartFix <- dcSalesPartial
+dcSalesPartFix$`Situs Zip Code` <- factor(dcSalesPartFix$`Situs Zip Code`)
+dcSalesPartFix$`Sale Year` <- factor(dcSalesPartFix$`Sale Year`)
+dcSalesPartFix$Style <- factor(dcSalesPartFix$Style)
+dcSalesPartFix$Stories <- factor(dcSalesPartFix$Stories)
+dcSalesPartFix$`Bedroom Count` <- factor(dcSalesPartFix$`Bedroom Count`)
+dcSalesPartFix$`Bathroom Count` <- factor(dcSalesPartFix$`Bathroom Count`)
+dcSalesPartFix$Quality <- factor(dcSalesPartFix$Quality)
+dcSalesPartFix$`Walkout Basement` <- factor(dcSalesPartFix$`Walkout Basement`)
+str(dcSalesPartFix)
+
+dcSalesPartFixLm <- lm(`Sale Price` ~ ., data = dcSalesPartFix)
+summary(dcSalesPartFixLm)
+ 
+```
+ 
+### Create a normalization function, test it, and then create a model and evaluate.
+ 
+```{r}
+normalize <- function(x) {
+    return ((x - min(x)) / (max(x) - min(x)))
+}
+normalize(c(1,2,3,4,5))
+normalize(c(10, 20, 30, 40, 50))
+ 
+dcSalesPartFixNorm <- dcSalesPartFix
+dcSalesPartFixNorm[1:7] <- as.data.frame(lapply(dcSalesPartFixNorm[1:7], normalize))
+summary (dcSalesPartFixNorm)
+dcSalesPartFixNormLm <- lm(`Sale Price` ~ ., data = dcSalesPartFixNorm)
+confint(dcSalesPartFixNormLm)
+summary(dcSalesPartFixNormLm)
+ 
+```
+ 
+### Create training and testing.
+ 
+```{r}
+samp <- sample(nrow(dcSalesPartFix), 0.8 * nrow(dcSalesPartial))
+dcSalesTrain <- dcSalesPartFix[samp, ]
+dcSalesTest <- dcSalesPartFix[-samp, ]
+ 
+```
+ 
+### Create Linear Regression model for evaluation.
+ 
+```{r}
+modelLm <- lm(`Sale Price` ~ ., data = dcSalesTrain)
+summary (modelLm)
+modelLmPred <- predict(modelLm, newdata = dcSalesTest)
+modelLmPredActuals <- data.frame(cbind(actuals=dcSalesTest$`Sale Price`, preds=modelLmPred))  # create modelLmPredActuals dataframe.
+corrAccLm <- cor(modelLmPredActuals)  # 88.5% Accuracy
+corrAccLm
+regr.eval(modelLmPredActuals$actuals, modelLmPredActuals$preds)
+head(modelLmPredActuals)
+plot(modelLmPredActuals,main="Linear Regression Pred by Act",col="blue")
+ 
+```
+ 
+### Create Cross Validation Random Forest model for evaluation.
+ 
+```{r}
+myControl = trainControl(method = "cv", number = 5, verboseIter = FALSE)
+modelRf = train(`Sale Price` ~ ., data = dcSalesTrain, tuneLength = 1, method = "ranger", importance = 'impurity', trControl = myControl)
+summary(modelRf)
+modelRf
+t.test(dcSalesTrain$"Sale Price", modelRf$predictions)
+modelRfPred <- predict(modelRf, newdata = dcSalesTest)
+modelRfPredAct <- data.frame(cbind(actuals=dcSalesTest$`Sale Price`, preds=modelRfPred))  # create modelRfPredAct dataframe.
+corrAccRf <- cor(modelRfPredAct)  # 91.0% Accuracy
+corrAccRf
+regr.eval(modelRfPredAct$actuals, modelRfPredAct$preds)
+head(modelRfPredAct)
+plot(modelRfPredAct,main="Random Forest with CV Pred by Act",col="blue")
+ 
+```
+ 
+### Create Cross Validation Gradient Boosting Machine model for evaluation.
+ 
+```{r}
+modelSgb = train(`Sale Price` ~ ., data = dcSalesTrain, tuneLength = 2, method = "gbm",  trControl = myControl)
+summary(modelSgb)
+modelSgb
+t.test(dcSalesTrain$"Sale Price", modelSgb$predictions)
+modelSgbPred <- predict(modelSgb, newdata = dcSalesTest)
+modelSgbPredAct <- data.frame(cbind(actuals=dcSalesTest$`Sale Price`, preds=modelSgbPred))  # create modelSgbPredAct dataframe.
+corrAccSgb <- cor(modelSgbPredAct)  # 88.9% Accuracy
+corrAccSgb
+regr.eval(modelSgbPredAct$actuals, modelSgbPredAct$preds)
+head(modelSgbPredAct)
+plot(modelSgbPredAct,main="Gradient Boosting with CV Pred by Act",col="blue")
+ 
+```
+ 
+### Create Extreme Gradient Boosting model for evaluation.
+ 
+```{r}
+xgbTuneGrid = expand.grid(nrounds = c(50, 100), lambda = seq(0.1, 0.5, 0.1), alpha = seq(0.1, 0.5, 0.1), eta = c(0.3, 0.4))
+modelXgb = train(`Sale Price` ~ ., data = dcSalesTrain, tuneLength = 3, method = "xgbLinear",  trControl = myControl, tunegrid = xgbTuneGrid)
+summary(modelXgb)
+modelXgb
+t.test(dcSalesTrain$"Sale Price", modelXgb$predictions)
+modelXgbPred <- predict(modelXgb, newdata = dcSalesTest)
+modelXgbPredAct <- data.frame(cbind(actuals=dcSalesTest$`Sale Price`, preds=modelXgbPred))  # create modelXgbPredAct dataframe.
+corrAccXgb <- cor(modelXgbPredAct)  # 92.2% Accuracy
+corrAccXgb
+regr.eval(modelXgbPredAct$actuals, modelXgbPredAct$preds)
+head(modelXgbPredAct)
+plot(modelXgbPredAct,main="Extreme Gradient Boosting with CV Pred by Act",col="blue")
+ 
+```
+ 
+### Create Support Vector Machine (SVM) model for evaluation.
+ 
+```{r}
+modelSvm = svm(`Sale Price`~., data = dcSalesTrain, kernel="linear", scale = FALSE)
+summary(modelSvm)
+modelSvm
+modelSvmPred <- predict(modelSvm, newdata = dcSalesTest)
+modelSvmPredAct <- data.frame(cbind(actuals=dcSalesTest$`Sale Price`, preds=modelSvmPred))  # create modelSvmPredAct dataframe.
+corrAccSvm <- cor(modelSvmPredAct)  # 80.8% Accuracy
+corrAccSvm
+regr.eval(modelSvmPredAct$actuals, modelSvmPredAct$preds)
+head(modelSvmPredAct)
+plot(modelSvmPredAct,main="Support Vector Machine Pred by Act",col="blue")
+ 
+```
+
